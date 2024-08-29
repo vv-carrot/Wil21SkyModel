@@ -1,0 +1,472 @@
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"  
+
+
+#define SPECTRAL_CHANNELS 11
+#define CHANNEL_START 300.0 
+#define CHANNEL_WIDTH 40.0
+#define SPECTRAL_RESPONSE_START 360.0
+#define SPECTRAL_RESPONSE_STEP 5.0
+#define PLANET_RADIUS 6378000.0
+
+struct Spectrum  
+{  
+    double Values[SPECTRAL_CHANNELS];
+};
+
+struct DoublePacked
+{
+	uint Low;
+	uint High;
+};
+
+// Radiance data
+int Rank;  
+int SunOffset;  
+int SunStride;  
+int ZenithOffset;  
+int ZenithStride;  
+int EmphOffset;  
+int TotalCoefsSingleConfig;  
+int TotalCoefsAllConfigs;  
+int SunBreaksSize;
+int ZenithBreaksSize;
+int EmphBreaksSize;
+
+// StructureBuffer size
+int VisibilitiesRadSize;
+int AlbedosRadSize;
+int AltitudesRadSize;
+int ElevationsRadSize;
+int DataRadSize;
+
+
+
+// Meta data buffers
+StructuredBuffer<DoublePacked> SunBreaks;  
+StructuredBuffer<DoublePacked> ZenithBreaks;  
+StructuredBuffer<DoublePacked> EmphBreaks;  
+
+// Radiance data buffers
+StructuredBuffer<DoublePacked> VisibilitiesRad;  
+StructuredBuffer<DoublePacked> AlbedosRad;  
+StructuredBuffer<DoublePacked> AltitudesRad;  
+StructuredBuffer<DoublePacked> ElevationsRad;  
+Buffer<uint> DataRad;    
+
+// Buffer<uint> SpectralResponse;
+RWStructuredBuffer<Spectrum> OutputBuffer;  
+RWTexture2D<float4> OutTexture;
+
+/////// Controllable parameters ///////
+// Spectrum channels set
+int Resolution;
+// Parameters set
+float SolarElevation;
+float SolarAzimuth;
+float Albedo;
+float Visibility; // 27.6, 40.0, 59.4, 90.0, 131.8
+float Altitude; // constant 0
+
+struct InterpolationParameter {
+	double factor;
+	int    index;
+};
+
+/// Angles converted into interpolation parameters.
+struct AngleParameters {
+	InterpolationParameter gamma, alpha, zero;
+};
+
+/// Structure controlling interpolation with respect to visibility, albedo, altitude and elevation.
+struct ControlParameters  
+{  
+	float4x4 coefficients;  
+	double4 interpolationFactor;  
+};  
+
+struct Parameters {  
+	double visibility;  
+	double albedo;  
+	double altitude;  
+	double elevation;  
+	double gamma;  
+	double shadow;  
+	double zero;  
+	double theta;  
+}; 
+
+/////////////////////////////////////////////////////////////////////////////////////
+// Model evaluation for sky radiance
+/////////////////////////////////////////////////////////////////////////////////////
+
+Parameters ComputeParameters(float3 WorldPos, float3 WorldDir, float Elevation, float Azimuth, float Vis, float Albedo) 
+{  
+	const int SAFETY_ALTITUDE = 50;
+
+	Parameters params;  
+    
+	params.visibility = Vis;  
+	params.albedo = Albedo;
+	
+	// Altitude is fixed 0 in sky model dataset ground
+	WorldPos.z = PLANET_RADIUS; // * KILOMETER_TO_METER;
+	params.altitude = WorldPos.z + SAFETY_ALTITUDE - PLANET_RADIUS; // * KILOMETER_TO_METER; 
+	params.altitude = max(params.altitude, 0.0);
+	
+	
+	float  distanceToView     = PLANET_RADIUS + SAFETY_ALTITUDE;
+	float3 ShiftWorldPos = float3(0.0, 0.0, distanceToView-PLANET_RADIUS);
+	// Shift viewpoint about safety altitude up
+	
+	float3 SunDirection = float3(cos(Azimuth) * cos(Elevation), sin(Azimuth) * cos(Elevation), sin(Elevation));
+	const float dotZenithSun = dot(normalize(WorldPos), SunDirection);
+	params.elevation          = 0.5 * PI - acos(dotZenithSun);
+
+	// Altitude-corrected view direction
+	float3 lookAt = ShiftWorldPos + WorldDir;
+	
+	const float correction =
+		sqrt(distanceToView * distanceToView - PLANET_RADIUS * PLANET_RADIUS) / distanceToView;
+
+	float3 toNewOrigin = float3(0,0,1) * (distanceToView - correction); // normalize(WorldPos) * (distanceToView - correction);
+	float3 newOrigin   = float3(0, 0, - PLANET_RADIUS) + toNewOrigin;
+	float3 correctView = lookAt - newOrigin;
+	float3 correctViewN = normalize(correctView);
+	
+	float dotProductSun = dot(WorldDir, SunDirection);
+	params.gamma         = acos(dotProductSun);
+	
+	float effectiveElevation = Elevation;  
+	float effectiveAzimuth = Azimuth;  
+	float shadowAngle = effectiveElevation + PI * 0.5;
+	
+	float3 shadowDirectionN = float3(  
+	cos(shadowAngle) * cos(effectiveAzimuth),  
+	cos(shadowAngle) * sin(effectiveAzimuth),  
+	sin(shadowAngle)
+	);
+	float dotProductShadow = dot(correctViewN, shadowDirectionN);
+	params.shadow                 = acos(dotProductShadow);
+
+	float cosThetaCor = dot(correctViewN, float3(0,0,1));
+	params.zero        = acos(cosThetaCor);
+
+	float cosTheta = dot(WorldDir, float3(0,0,1));
+	params.theta    = acos(cosTheta);
+	
+	return params;
+}  
+
+InterpolationParameter GetInterpolationParameter(double queryVal, StructuredBuffer<DoublePacked> breaks, int breakCount)  
+{  
+	InterpolationParameter parameter;
+	parameter.index=0;
+	parameter.factor=0.0;
+    // if(breakCount==0)return parameter;
+	// Clamp the value to the valid range
+	// Only support int 
+	float clamped = clamp(queryVal, asdouble(breaks[0].Low,breaks[0].High), asdouble(breaks[breakCount - 1].Low,breaks[breakCount - 1].High));
+    
+	// Find the index of the nearest greater parameter value  
+	int index = breakCount - 1;
+	
+	for (int i = 1; i < breakCount; ++i)  
+	{  
+		if (asdouble(breaks[i].Low,breaks[i].High) > clamped)  
+		{  
+			index = i;  
+			break;  
+		}  
+	}  
+    
+	// Compute the index and float factor  
+	parameter.index = index-1;
+	parameter.factor = index ==breakCount-1?0.0:(clamped - asdouble(breaks[index-1].Low,breaks[index-1].High)) / (asdouble(breaks[index].Low,breaks[index].High) - asdouble(breaks[index-1].Low,breaks[index-1].High));
+
+	// Ensure the results are within expected ranges  
+	parameter.index = clamp(parameter.index, 0, breakCount - 1);  
+	parameter.factor = parameter.factor>1.0?1.0:parameter.factor; //clamp(parameter.factor, 0.0, 1.0);
+	parameter.factor = parameter.factor<0?0.0:parameter.factor;
+    
+	return parameter;  
+}  
+
+int GetCoefficientsIndex(  
+	int elevation,  // for index
+	int altitude,  
+	int visibility,  
+	int albedo,  
+	int wavelength)  // wave length is channel idx
+{  
+	return TotalCoefsSingleConfig * (  
+		wavelength +   
+		SPECTRAL_CHANNELS * elevation +   
+		SPECTRAL_CHANNELS * ElevationsRadSize * altitude +  
+		SPECTRAL_CHANNELS * ElevationsRadSize * AltitudesRadSize * albedo +  
+		SPECTRAL_CHANNELS * ElevationsRadSize * AltitudesRadSize * AlbedosRadSize * visibility  
+	);  
+}  
+
+double EvalPL(int index, double factor)  
+{
+	// if(DataRadSize -1 < index) return 0.0; // clamp(index, 0, DataRadSize-1
+	double coef0=asdouble(DataRad[index],DataRad[index+1]);
+	double coef1=asdouble(DataRad[index+2],DataRad[index+3]);
+	return (coef1-coef0) * factor + coef0;  
+}
+double Reconstruct(AngleParameters radianceParameters, float4x4 channelParameters, int initialOffset)  
+{  
+	// 用于存储结果的初始值  
+	double result = 0.0;
+	int dataOffset = channelParameters[initialOffset/4][initialOffset%4];
+	
+	for (int r = 0; r <Rank; ++r)   
+	{
+		
+		int sunIndex = dataOffset + 2*(SunOffset + r * SunStride + radianceParameters.gamma.index);  
+		double sunParam = EvalPL(sunIndex, radianceParameters.gamma.factor); 
+		
+		int zenithIndex = dataOffset + 2*(ZenithOffset + r * ZenithStride + radianceParameters.alpha.index);  
+		double zenithParam = EvalPL(zenithIndex, radianceParameters.alpha.factor); 
+		
+		result += sunParam * zenithParam;  
+	}  
+	
+	int emphIndex = dataOffset + 2*(EmphOffset + radianceParameters.zero.index);  
+	double emphParam = EvalPL(emphIndex, radianceParameters.zero.factor); 
+	result *= emphParam;  
+	result = max(result, 0.0);  
+
+	return result;  
+}  
+
+
+
+double InterpolateParameters(AngleParameters angleParameters, ControlParameters controlParameters)  
+{
+	double results[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};  
+    
+	// First, compute all 16 reconstructions
+	// For Toffset range from 0 to 15
+	[unroll]
+	for (int i = 0; i < 16; ++i)  
+	{  
+		results[i] = Reconstruct(angleParameters, controlParameters.coefficients, i);  
+	}  
+    
+	// Now, interpolate in 4 levels
+	// i marks offset
+    
+	for (int level = 3; level >= 0; --level)  
+	{  
+		int step = 1 <<(3 - level);
+		
+		for (int i = 0; i < 16; i += 2 * step)  
+		{  
+			double resultLow = results[i];  
+			double resultHigh = results[i + step];  
+			double factor = controlParameters.interpolationFactor[level];  
+
+			results[i] = factor < 1e-6? resultLow : lerp(resultLow, resultHigh, factor);
+		}  
+	}  
+    
+	// The final result is in results[0]  
+	return results[0];  
+}
+
+
+double EvaluateModel(Parameters params, float channelIndex)  
+{   
+    AngleParameters angleParameters;  
+    angleParameters.gamma = GetInterpolationParameter(params.gamma, SunBreaks, SunBreaksSize);  
+	angleParameters.alpha = GetInterpolationParameter(params.elevation < 0.0 ? params.shadow : params.zero, ZenithBreaks, ZenithBreaksSize);  
+	angleParameters.zero = GetInterpolationParameter(params.zero, EmphBreaks, EmphBreaksSize);  
+	
+	  InterpolationParameter visibilityParam = GetInterpolationParameter(params.visibility, VisibilitiesRad, VisibilitiesRadSize);  
+	  InterpolationParameter albedoParam = GetInterpolationParameter(params.albedo, AlbedosRad, AlbedosRadSize);  
+	  InterpolationParameter altitudeParam = GetInterpolationParameter(params.altitude, AltitudesRad, AltitudesRadSize);  
+	  InterpolationParameter elevationParam = GetInterpolationParameter(params.elevation / PI * 180.0, ElevationsRad, ElevationsRadSize);
+	
+	    ControlParameters controlParameters;  
+	    for (int i = 0; i < 16; ++i)  
+	    {  
+	        int visibilityIndex = min(visibilityParam.index + i / 8, VisibilitiesRadSize - 1);  
+	        int albedoIndex = min(albedoParam.index + (i % 8) / 4, AlbedosRadSize - 1);  
+	        int altitudeIndex = min(altitudeParam.index + (i % 4) / 2, AltitudesRadSize - 1);  
+	        int elevationIndex = min(elevationParam.index + i % 2, ElevationsRadSize - 1);  
+			int idx = GetCoefficientsIndex(elevationIndex, altitudeIndex, visibilityIndex, albedoIndex, channelIndex);
+	        controlParameters.coefficients[i/4][i%4] = idx*2; // asdouble(DataRad[idx*2], DataRad[idx*2+1]); 
+	    }  
+	  controlParameters.interpolationFactor.x = visibilityParam.factor;  
+	  controlParameters.interpolationFactor.y = albedoParam.factor;  
+	  controlParameters.interpolationFactor.z = altitudeParam.factor;  
+	  controlParameters.interpolationFactor.w = elevationParam.factor;
+	
+	  double result = InterpolateParameters(angleParameters, controlParameters);  
+	  
+	  return result;  
+}  
+
+double3 SpectrumToRGB(Spectrum spectrum)  
+{
+			const double3 SpectralResponseData[95] = {
+	        double3(0.000129900000f, 0.000003917000f, 0.000606100000f),  
+	        double3(0.000232100000f, 0.000006965000f, 0.001086000000f),  
+	        double3(0.000414900000f, 0.000012390000f, 0.001946000000f),  
+	        double3(0.000741600000f, 0.000022020000f, 0.003486000000f),  
+	        double3(0.001368000000f, 0.000039000000f, 0.006450001000f),  
+	        double3(0.002236000000f, 0.000064000000f, 0.010549990000f),  
+	        double3(0.004243000000f, 0.000120000000f, 0.020050010000f),  
+	        double3(0.007650000000f, 0.000217000000f, 0.036210000000f),  
+	        double3(0.014310000000f, 0.000396000000f, 0.067850010000f),  
+	        double3(0.023190000000f, 0.000640000000f, 0.110200000000f),  
+	        double3(0.043510000000f, 0.001210000000f, 0.207400000000f),  
+	        double3(0.077630000000f, 0.002180000000f, 0.371300000000f),  
+	        double3(0.134380000000f, 0.004000000000f, 0.645600000000f),  
+	        double3(0.214770000000f, 0.007300000000f, 1.039050100000f),  
+	        double3(0.283900000000f, 0.011600000000f, 1.385600000000f),  
+	        double3(0.328500000000f, 0.016840000000f, 1.622960000000f),  
+	        double3(0.348280000000f, 0.023000000000f, 1.747060000000f),  
+	        double3(0.348060000000f, 0.029800000000f, 1.782600000000f),  
+	        double3(0.336200000000f, 0.038000000000f, 1.772110000000f),  
+	        double3(0.318700000000f, 0.048000000000f, 1.744100000000f),  
+	        double3(0.290800000000f, 0.060000000000f, 1.669200000000f),  
+	        double3(0.251100000000f, 0.073900000000f, 1.528100000000f),  
+	        double3(0.195360000000f, 0.090980000000f, 1.287640000000f),  
+	        double3(0.142100000000f, 0.112600000000f, 1.041900000000f),  
+	        double3(0.095640000000f, 0.139020000000f, 0.812950100000f),  
+	        double3(0.057950010000f, 0.169300000000f, 0.616200000000f),  
+	        double3(0.032010000000f, 0.208020000000f, 0.465180000000f),  
+	        double3(0.014700000000f, 0.258600000000f, 0.353300000000f),  
+	        double3(0.004900000000f, 0.323000000000f, 0.272000000000f),  
+	        double3(0.002400000000f, 0.407300000000f, 0.212300000000f),  
+	        double3(0.009300000000f, 0.503000000000f, 0.158200000000f),  
+	        double3(0.029100000000f, 0.608200000000f, 0.111700000000f),  
+	        double3(0.063270000000f, 0.710000000000f, 0.078249990000f),  
+	        double3(0.109600000000f, 0.793200000000f, 0.057250010000f),  
+	        double3(0.165500000000f, 0.862000000000f, 0.042160000000f),  
+	        double3(0.225749900000f, 0.914850100000f, 0.029840000000f),  
+	        double3(0.290400000000f, 0.954000000000f, 0.020300000000f),  
+	        double3(0.359700000000f, 0.980300000000f, 0.013400000000f),  
+	        double3(0.433449900000f, 0.994950100000f, 0.008749999000f),  
+	        double3(0.512050100000f, 1.000000000000f, 0.005749999000f),  
+	        double3(0.594500000000f, 0.995000000000f, 0.003900000000f),  
+	        double3(0.678400000000f, 0.978600000000f, 0.002749999000f),  
+	        double3(0.762100000000f, 0.952000000000f, 0.002100000000f),  
+	        double3(0.842500000000f, 0.915400000000f, 0.001800000000f),  
+	        double3(0.916300000000f, 0.870000000000f, 0.001650001000f),  
+	        double3(0.978600000000f, 0.816300000000f, 0.001400000000f),  
+	        double3(1.026300000000f, 0.757000000000f, 0.001100000000f),  
+	        double3(1.056700000000f, 0.694900000000f, 0.001000000000f),  
+	        double3(1.062200000000f, 0.631000000000f, 0.000800000000f),  
+	        double3(1.045600000000f, 0.566800000000f, 0.000600000000f),  
+	        double3(1.002600000000f, 0.503000000000f, 0.000340000000f),  
+	        double3(0.938400000000f, 0.441200000000f, 0.000240000000f),  
+	        double3(0.854449900000f, 0.381000000000f, 0.000190000000f),  
+	        double3(0.751400000000f, 0.321000000000f, 0.000100000000f),  
+	        double3(0.642400000000f, 0.265000000000f, 0.000049999990f),  
+	        double3(0.541900000000f, 0.217000000000f, 0.000030000000f),  
+	        double3(0.447900000000f, 0.175000000000f, 0.000020000000f),  
+	        double3(0.360800000000f, 0.138200000000f, 0.000010000000f),  
+	        double3(0.283500000000f, 0.107000000000f, 0.000000000000f),  
+	        double3(0.218700000000f, 0.081600000000f, 0.000000000000f),  
+	        double3(0.164900000000f, 0.061000000000f, 0.000000000000f),  
+	        double3(0.121200000000f, 0.044580000000f, 0.000000000000f),  
+	        double3(0.087400000000f, 0.032000000000f, 0.000000000000f),  
+	        double3(0.063600000000f, 0.023200000000f, 0.000000000000f),  
+	        double3(0.046770000000f, 0.017000000000f, 0.000000000000f),  
+	        double3(0.032900000000f, 0.011920000000f, 0.000000000000f),  
+	        double3(0.022700000000f, 0.008210000000f, 0.000000000000f),  
+	        double3(0.015840000000f, 0.005723000000f, 0.000000000000f),  
+	        double3(0.011359160000f, 0.004102000000f, 0.000000000000f),  
+	        double3(0.008110916000f, 0.002929000000f, 0.000000000000f),  
+	        double3(0.005790346000f, 0.002091000000f, 0.000000000000f),  
+	        double3(0.004109457000f, 0.001484000000f, 0.000000000000f),  
+	        double3(0.002899327000f, 0.001047000000f, 0.000000000000f),  
+	        double3(0.002049190000f, 0.000740000000f, 0.000000000000f),  
+	        double3(0.001439971000f, 0.000520000000f, 0.000000000000f),  
+	        double3(0.000999949300f, 0.000361100000f, 0.000000000000f),  
+	        double3(0.000690078600f, 0.000249200000f, 0.000000000000f),  
+	        double3(0.000476021300f, 0.000171900000f, 0.000000000000f),  
+	        double3(0.000332301100f, 0.000120000000f, 0.000000000000f),  
+	        double3(0.000234826100f, 0.000084800000f, 0.000000000000f),  
+	        double3(0.000166150500f, 0.000060000000f, 0.000000000000f),  
+	        double3(0.000117413000f, 0.000042400000f, 0.000000000000f),  
+	        double3(0.000083075270f, 0.000030000000f, 0.000000000000f),  
+	        double3(0.000058706520f, 0.000021200000f, 0.000000000000f),  
+	        double3(0.000041509940f, 0.000014990000f, 0.000000000000f),  
+	        double3(0.000029353260f, 0.000010600000f, 0.000000000000f),  
+	        double3(0.000020673830f, 0.000007465700f, 0.000000000000f),  
+	        double3(0.000014559770f, 0.000005257800f, 0.000000000000f),  
+	        double3(0.000010253980f, 0.000003702900f, 0.000000000000f),  
+	        double3(0.000007221456f, 0.000002607800f, 0.000000000000f),  
+	        double3(0.000005085868f, 0.000001836600f, 0.000000000000f),  
+	        double3(0.000003581652f, 0.000001293400f, 0.000000000000f),  
+	        double3(0.000002522525f, 0.000000910930f, 0.000000000000f),  
+	        double3(0.000001776509f, 0.000000641530f, 0.000000000000f),  
+	        double3(0.000001251141f, 0.000000451810f, 0.000000000000f) 
+		};
+	double3 xyz = double3(0, 0, 0);  
+	float SPECTRUM_WAVELENGTHS[11] = {
+		340.0,  380.0,  420.0,  460.0,  500.0,  540.0,  580.0,  
+		620.0,  660.0,  700.0,  740.0  
+	};  
+	[unroll]  
+	for (int wl = 0; wl < SPECTRAL_CHANNELS; wl++)  
+	{  
+		int responseIdx = (int)(SPECTRUM_WAVELENGTHS[wl] - SPECTRAL_RESPONSE_START) / SPECTRAL_RESPONSE_STEP;
+		
+		// xyz = responseIdx >= 0 && responseIdx < 95 ? xyz
+		// 	+ double3(asdouble(SpectralResponse[responseIdx],SpectralResponse[responseIdx+1]), asdouble(SpectralResponse[responseIdx+2],SpectralResponse[responseIdx+3]), asdouble(SpectralResponse[responseIdx+4],SpectralResponse[responseIdx+5]))
+		// 	* spectrum.Values[wl] : xyz;
+		xyz = responseIdx >= 0 && responseIdx < 95 ? xyz + SpectralResponseData[responseIdx] * spectrum.Values[wl] : xyz; 
+	}  
+	xyz *= CHANNEL_WIDTH;  
+
+	double3 rgb;  
+	rgb.x = 3.2404542L * xyz.x - 1.5371385L * xyz.y - 0.4985314L * xyz.z;  
+	rgb.y = -0.9692660L * xyz.x + 1.8760108L * xyz.y + 0.0415560L * xyz.z;  
+	rgb.z = 0.0556434L * xyz.x - 0.2040259L * xyz.y + 1.0572252L * xyz.z;  
+
+	return rgb;  
+}
+
+
+[numthreads(32, 32, 1)]  
+void Wil21CS1(uint3 ThreadId : SV_DispatchThreadID)  
+{
+	// calculate for view dir by pix pos
+	float2 UV = (float2(ThreadId.xy) + 0.5f) / float2(Resolution, Resolution/2);
+	float Theta =  (1-UV.y) * PI/2 ; // elevation
+	float Phi = (UV.x) * PI * 2;
+	// float3 WorldDir = GetScreenWorldDirFromPixCoord(PixPos, Resolution);
+	float3 WorldDir;// = normalize(float3((float)ThreadId.x - (float)(Resolution / 2), -((float)ThreadId.y - (float)(Resolution / 2)), 10));
+	WorldDir.x = cos(Theta) * cos(Phi);
+	WorldDir.y = cos(Theta) * sin(Phi);
+	WorldDir.z = sin(Theta);  
+
+	// calculate for view point
+	// the camera position relative to the virtual planet center.
+	// float3 WorldPos = GetTranslatedCameraPlanetPos();
+	// float ViewHeight = length(WorldPos);
+	// WorldPos = float3(0.0, 0.0, ViewHeight);
+	float3 WorldPos = float3(0.0, 0.0, 0.0);
+	
+	Parameters params = ComputeParameters(WorldPos, WorldDir, SolarElevation/180.0*PI, SolarAzimuth/180.0*PI, Visibility, Albedo);
+	
+
+	uint index = ThreadId.y * Resolution + ThreadId.x; 
+	// 输出到光谱计算结果缓冲区
+	[unroll]
+	for (int i = 0; i < SPECTRAL_CHANNELS; i++)  
+	{
+		double result = EvaluateModel(params, i);
+		OutputBuffer[index].Values[i] = result;
+		
+	}
+	uint2 PixelCoord =ThreadId.xy;
+	double3 Color = SpectrumToRGB(OutputBuffer[index]);
+	OutTexture[PixelCoord] = float4(float3(Color), 1.0);
+}  

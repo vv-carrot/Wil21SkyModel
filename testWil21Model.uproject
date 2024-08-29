@@ -1,0 +1,22 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{3BB8B39F-4775-D3CE-FA28-52802C5DB451}",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "testWil21Model",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		}
+	]
+}
