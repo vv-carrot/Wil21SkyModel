@@ -1,4 +1,5 @@
 #include "DataProcessorActor.h"
+
 #include "HAL/PlatformFilemanager.h"  
 #include "Misc/FileHelper.h"
   
@@ -211,22 +212,27 @@ void ADataProcessor::ReadRadianceFile(IFileHandle* Handle, double SingleVisibili
 ADataProcessor::ADataProcessor()  
 {  
     PrimaryActorTick.bCanEverTick = true;
-    // OnVariableChangedDelegate.AddDynamic(this, &ADataProcessor::OnVariableChanged);
-    // Create render target
-    // if(!OutputRenderTarget)
-    // {
-    //     OutputRenderTarget = CreateDefaultSubobject<UTextureRenderTarget2D>(TEXT("OutputRenderTarget"));
-    //     OutputRenderTarget->InitCustomFormat(1024, 512, PF_R8G8B8A8, false);
-    //     OutputRenderTarget->UpdateResourceImmediate();
-    // }
-
     ReadDatFileFromContentFolder(TEXT("SkyModelDatasetGround.dat"), 0.0);
+    // InitializePersistentBuffer(ShaderPackedData.DataRad);
+    // If render target is null, create a new black rt and init it
+    if (!OutputRenderTarget)
+    {
+        OutputRenderTarget = NewObject<UTextureRenderTarget2D>();
+        OutputRenderTarget->InitCustomFormat(1024, 512, PF_FloatRGBA, false);
+        OutputRenderTarget->UpdateResourceImmediate();
+    }
 }
 
 void ADataProcessor::ReadDatFileFromContentFolder(const FString& FileName, double SingleVisibility)  
 {  
     FString FilePath = FPaths::Combine(FPaths::ProjectPluginsDir(), TEXT("Wil21Model"), TEXT("Content"), FileName);
-    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();  
+    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+    // If the file does not exist, log an error and return
+    if (!PlatformFile.FileExists(*FilePath))
+    {
+        UE_LOG(LogTemp, Error, TEXT("DAT File not found: %s"), *FilePath);
+        return;
+    }
     IFileHandle* Handle = PlatformFile.OpenRead(*FilePath);  
 
     if (!Handle)  
@@ -267,106 +273,139 @@ void ADataProcessor::ReadDatFileFromContentFolder(const FString& FileName, doubl
 
     ShaderPackedData.DataRad = UWil21BlueprintLibrary::ConvertDoublesToFUint32s(SkyModelData.RadianceData.DataRad);
     ShaderPackedData.DataRadSize = ShaderPackedData.DataRad.Num();
-
- //    TArray<double> SpectralResponseData = {
- //         0.000129900000f, 0.000003917000f, 0.000606100000f,
- //         0.000232100000f, 0.000006965000f, 0.001086000000f,
- //         0.000414900000f, 0.000012390000f, 0.001946000000f,
- //         0.000741600000f, 0.000022020000f, 0.003486000000f,
- //         0.001368000000f, 0.000039000000f, 0.006450001000f,
- //         0.002236000000f, 0.000064000000f, 0.010549990000f,
- //         0.004243000000f, 0.000120000000f, 0.020050010000f,
- //         0.007650000000f, 0.000217000000f, 0.036210000000f,
- //         0.014310000000f, 0.000396000000f, 0.067850010000f,
- //         0.023190000000f, 0.000640000000f, 0.110200000000f,
- //         0.043510000000f, 0.001210000000f, 0.207400000000f,
- //         0.077630000000f, 0.002180000000f, 0.371300000000f,
- //         0.134380000000f, 0.004000000000f, 0.645600000000f,
- //         0.214770000000f, 0.007300000000f, 1.039050100000f,
- //         0.283900000000f, 0.011600000000f, 1.385600000000f,
- //         0.328500000000f, 0.016840000000f, 1.622960000000f,
- //         0.348280000000f, 0.023000000000f, 1.747060000000f,
- //         0.348060000000f, 0.029800000000f, 1.782600000000f,
- //         0.336200000000f, 0.038000000000f, 1.772110000000f,
- //         0.318700000000f, 0.048000000000f, 1.744100000000f,
- //         0.290800000000f, 0.060000000000f, 1.669200000000f,
- //         0.251100000000f, 0.073900000000f, 1.528100000000f,
- //         0.195360000000f, 0.090980000000f, 1.287640000000f,
- //         0.142100000000f, 0.112600000000f, 1.041900000000f,
- //         0.095640000000f, 0.139020000000f, 0.812950100000f,
- //         0.057950010000f, 0.169300000000f, 0.616200000000f,
- //         0.032010000000f, 0.208020000000f, 0.465180000000f,
- //         0.014700000000f, 0.258600000000f, 0.353300000000f,
- //         0.004900000000f, 0.323000000000f, 0.272000000000f,
- //         0.002400000000f, 0.407300000000f, 0.212300000000f,
- //         0.009300000000f, 0.503000000000f, 0.158200000000f,
- //         0.029100000000f, 0.608200000000f, 0.111700000000f,
- //         0.063270000000f, 0.710000000000f, 0.078249990000f,
- //         0.109600000000f, 0.793200000000f, 0.057250010000f,
- //         0.165500000000f, 0.862000000000f, 0.042160000000f,
- //         0.225749900000f, 0.914850100000f, 0.029840000000f,
- //         0.290400000000f, 0.954000000000f, 0.020300000000f,
- //         0.359700000000f, 0.980300000000f, 0.013400000000f,
- //         0.433449900000f, 0.994950100000f, 0.008749999000f,
- //         0.512050100000f, 1.000000000000f, 0.005749999000f,
- //         0.594500000000f, 0.995000000000f, 0.003900000000f,
- //         0.678400000000f, 0.978600000000f, 0.002749999000f,
- //         0.762100000000f, 0.952000000000f, 0.002100000000f,
- //         0.842500000000f, 0.915400000000f, 0.001800000000f,
- //         0.916300000000f, 0.870000000000f, 0.001650001000f,
- //         0.978600000000f, 0.816300000000f, 0.001400000000f,
- //         1.026300000000f, 0.757000000000f, 0.001100000000f,
- //         1.056700000000f, 0.694900000000f, 0.001000000000f,
- //         1.062200000000f, 0.631000000000f, 0.000800000000f,
- //         1.045600000000f, 0.566800000000f, 0.000600000000f,
- //         1.002600000000f, 0.503000000000f, 0.000340000000f,
- //         0.938400000000f, 0.441200000000f, 0.000240000000f,
- //         0.854449900000f, 0.381000000000f, 0.000190000000f,
- //         0.751400000000f, 0.321000000000f, 0.000100000000f,
- //         0.642400000000f, 0.265000000000f, 0.000049999990f,
- //         0.541900000000f, 0.217000000000f, 0.000030000000f,
- //         0.447900000000f, 0.175000000000f, 0.000020000000f,
- //         0.360800000000f, 0.138200000000f, 0.000010000000f,
- //         0.283500000000f, 0.107000000000f, 0.000000000000f,
- //         0.218700000000f, 0.081600000000f, 0.000000000000f,
- //         0.164900000000f, 0.061000000000f, 0.000000000000f,
- //         0.121200000000f, 0.044580000000f, 0.000000000000f,
- //         0.087400000000f, 0.032000000000f, 0.000000000000f,
- //         0.063600000000f, 0.023200000000f, 0.000000000000f,
- //         0.046770000000f, 0.017000000000f, 0.000000000000f,
- //         0.032900000000f, 0.011920000000f, 0.000000000000f,
- //         0.022700000000f, 0.008210000000f, 0.000000000000f,
- //         0.015840000000f, 0.005723000000f, 0.000000000000f,
- //         0.011359160000f, 0.004102000000f, 0.000000000000f,
- //         0.008110916000f, 0.002929000000f, 0.000000000000f,
- //         0.005790346000f, 0.002091000000f, 0.000000000000f,
- //         0.004109457000f, 0.001484000000f, 0.000000000000f,
- //         0.002899327000f, 0.001047000000f, 0.000000000000f,
- //         0.002049190000f, 0.000740000000f, 0.000000000000f,
- //         0.001439971000f, 0.000520000000f, 0.000000000000f,
- //         0.000999949300f, 0.000361100000f, 0.000000000000f,
- //         0.000690078600f, 0.000249200000f, 0.000000000000f,
- //         0.000476021300f, 0.000171900000f, 0.000000000000f,
- //         0.000332301100f, 0.000120000000f, 0.000000000000f,
- //         0.000234826100f, 0.000084800000f, 0.000000000000f,
- //         0.000166150500f, 0.000060000000f, 0.000000000000f,
- //         0.000117413000f, 0.000042400000f, 0.000000000000f,
- //         0.000083075270f, 0.000030000000f, 0.000000000000f,
- //         0.000058706520f, 0.000021200000f, 0.000000000000f,
- //         0.000041509940f, 0.000014990000f, 0.000000000000f,
- //         0.000029353260f, 0.000010600000f, 0.000000000000f,
- //         0.000020673830f, 0.000007465700f, 0.000000000000f,
- //         0.000014559770f, 0.000005257800f, 0.000000000000f,
- //         0.000010253980f, 0.000003702900f, 0.000000000000f,
- //         0.000007221456f, 0.000002607800f, 0.000000000000f,
- //         0.000005085868f, 0.000001836600f, 0.000000000000f,
- //         0.000003581652f, 0.000001293400f, 0.000000000000f,
- //         0.000002522525f, 0.000000910930f, 0.000000000000f,
- //         0.000001776509f, 0.000000641530f, 0.000000000000f,
- //         0.000001251141f, 0.000000451810f, 0.000000000000f
+     //    TArray<double> SpectralResponseData = {
+     //         0.000129900000f, 0.000003917000f, 0.000606100000f,
+     //         0.000232100000f, 0.000006965000f, 0.001086000000f,
+     //         0.000414900000f, 0.000012390000f, 0.001946000000f,
+     //         0.000741600000f, 0.000022020000f, 0.003486000000f,
+     //         0.001368000000f, 0.000039000000f, 0.006450001000f,
+     //         0.002236000000f, 0.000064000000f, 0.010549990000f,
+     //         0.004243000000f, 0.000120000000f, 0.020050010000f,
+     //         0.007650000000f, 0.000217000000f, 0.036210000000f,
+     //         0.014310000000f, 0.000396000000f, 0.067850010000f,
+     //         0.023190000000f, 0.000640000000f, 0.110200000000f,
+     //         0.043510000000f, 0.001210000000f, 0.207400000000f,
+     //         0.077630000000f, 0.002180000000f, 0.371300000000f,
+     //         0.134380000000f, 0.004000000000f, 0.645600000000f,
+     //         0.214770000000f, 0.007300000000f, 1.039050100000f,
+     //         0.283900000000f, 0.011600000000f, 1.385600000000f,
+     //         0.328500000000f, 0.016840000000f, 1.622960000000f,
+     //         0.348280000000f, 0.023000000000f, 1.747060000000f,
+     //         0.348060000000f, 0.029800000000f, 1.782600000000f,
+     //         0.336200000000f, 0.038000000000f, 1.772110000000f,
+     //         0.318700000000f, 0.048000000000f, 1.744100000000f,
+     //         0.290800000000f, 0.060000000000f, 1.669200000000f,
+     //         0.251100000000f, 0.073900000000f, 1.528100000000f,
+     //         0.195360000000f, 0.090980000000f, 1.287640000000f,
+     //         0.142100000000f, 0.112600000000f, 1.041900000000f,
+     //         0.095640000000f, 0.139020000000f, 0.812950100000f,
+     //         0.057950010000f, 0.169300000000f, 0.616200000000f,
+     //         0.032010000000f, 0.208020000000f, 0.465180000000f,
+     //         0.014700000000f, 0.258600000000f, 0.353300000000f,
+     //         0.004900000000f, 0.323000000000f, 0.272000000000f,
+     //         0.002400000000f, 0.407300000000f, 0.212300000000f,
+     //         0.009300000000f, 0.503000000000f, 0.158200000000f,
+     //         0.029100000000f, 0.608200000000f, 0.111700000000f,
+     //         0.063270000000f, 0.710000000000f, 0.078249990000f,
+     //         0.109600000000f, 0.793200000000f, 0.057250010000f,
+     //         0.165500000000f, 0.862000000000f, 0.042160000000f,
+     //         0.225749900000f, 0.914850100000f, 0.029840000000f,
+     //         0.290400000000f, 0.954000000000f, 0.020300000000f,
+     //         0.359700000000f, 0.980300000000f, 0.013400000000f,
+     //         0.433449900000f, 0.994950100000f, 0.008749999000f,
+     //         0.512050100000f, 1.000000000000f, 0.005749999000f,
+     //         0.594500000000f, 0.995000000000f, 0.003900000000f,
+     //         0.678400000000f, 0.978600000000f, 0.002749999000f,
+     //         0.762100000000f, 0.952000000000f, 0.002100000000f,
+     //         0.842500000000f, 0.915400000000f, 0.001800000000f,
+     //         0.916300000000f, 0.870000000000f, 0.001650001000f,
+     //         0.978600000000f, 0.816300000000f, 0.001400000000f,
+     //         1.026300000000f, 0.757000000000f, 0.001100000000f,
+     //         1.056700000000f, 0.694900000000f, 0.001000000000f,
+     //         1.062200000000f, 0.631000000000f, 0.000800000000f,
+     //         1.045600000000f, 0.566800000000f, 0.000600000000f,
+     //         1.002600000000f, 0.503000000000f, 0.000340000000f,
+     //         0.938400000000f, 0.441200000000f, 0.000240000000f,
+     //         0.854449900000f, 0.381000000000f, 0.000190000000f,
+     //         0.751400000000f, 0.321000000000f, 0.000100000000f,
+     //         0.642400000000f, 0.265000000000f, 0.000049999990f,
+     //         0.541900000000f, 0.217000000000f, 0.000030000000f,
+     //         0.447900000000f, 0.175000000000f, 0.000020000000f,
+     //         0.360800000000f, 0.138200000000f, 0.000010000000f,
+     //         0.283500000000f, 0.107000000000f, 0.000000000000f,
+     //         0.218700000000f, 0.081600000000f, 0.000000000000f,
+     //         0.164900000000f, 0.061000000000f, 0.000000000000f,
+     //         0.121200000000f, 0.044580000000f, 0.000000000000f,
+     //         0.087400000000f, 0.032000000000f, 0.000000000000f,
+     //         0.063600000000f, 0.023200000000f, 0.000000000000f,
+     //         0.046770000000f, 0.017000000000f, 0.000000000000f,
+     //         0.032900000000f, 0.011920000000f, 0.000000000000f,
+     //         0.022700000000f, 0.008210000000f, 0.000000000000f,
+     //         0.015840000000f, 0.005723000000f, 0.000000000000f,
+     //         0.011359160000f, 0.004102000000f, 0.000000000000f,
+     //         0.008110916000f, 0.002929000000f, 0.000000000000f,
+     //         0.005790346000f, 0.002091000000f, 0.000000000000f,
+     //         0.004109457000f, 0.001484000000f, 0.000000000000f,
+     //         0.002899327000f, 0.001047000000f, 0.000000000000f,
+     //         0.002049190000f, 0.000740000000f, 0.000000000000f,
+     //         0.001439971000f, 0.000520000000f, 0.000000000000f,
+     //         0.000999949300f, 0.000361100000f, 0.000000000000f,
+     //         0.000690078600f, 0.000249200000f, 0.000000000000f,
+     //         0.000476021300f, 0.000171900000f, 0.000000000000f,
+     //         0.000332301100f, 0.000120000000f, 0.000000000000f,
+     //         0.000234826100f, 0.000084800000f, 0.000000000000f,
+     //         0.000166150500f, 0.000060000000f, 0.000000000000f,
+     //         0.000117413000f, 0.000042400000f, 0.000000000000f,
+     //         0.000083075270f, 0.000030000000f, 0.000000000000f,
+     //         0.000058706520f, 0.000021200000f, 0.000000000000f,
+     //         0.000041509940f, 0.000014990000f, 0.000000000000f,
+     //         0.000029353260f, 0.000010600000f, 0.000000000000f,
+     //         0.000020673830f, 0.000007465700f, 0.000000000000f,
+     //         0.000014559770f, 0.000005257800f, 0.000000000000f,
+     //         0.000010253980f, 0.000003702900f, 0.000000000000f,
+     //         0.000007221456f, 0.000002607800f, 0.000000000000f,
+     //         0.000005085868f, 0.000001836600f, 0.000000000000f,
+     //         0.000003581652f, 0.000001293400f, 0.000000000000f,
+     //         0.000002522525f, 0.000000910930f, 0.000000000000f,
+     //         0.000001776509f, 0.000000641530f, 0.000000000000f,
+     //         0.000001251141f, 0.000000451810f, 0.000000000000f
 	// };
 	// ShaderPackedData.SpectralResponse = UWil21BlueprintLibrary::ConvertDoublesToFUint32s(SpectralResponseData);
 }
+
+void ADataProcessor::PostInitProperties()  
+{  
+    Super::PostInitProperties();  
+
+    // 在这里进行复杂的初始化  
+    if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))  
+    {  
+        InitializePersistentBuffer(ShaderPackedData.DataRad);  
+    }  
+}
+
+void ADataProcessor::UseRDGComputeWil21(const UObject* WorldContextObject, const FShaderPackedData& ShaderPackedDatas, const FShaderControlData& ShaderControlDatas)
+{
+
+    check(IsInGameThread());
+    // InitializePersistentBuffer(ShaderPackedDatas.DataRad);
+    if(DataRadBuffer == nullptr)
+    {
+        UE_LOG(LogTemp, Error, TEXT("DataRadBuffer is not initialized"));
+        return;
+    }
+    TRefCountPtr<FRDGPooledBuffer> DataRadPooledBuffers = this->DataRadPooledBuffer;
+    int32 TextureSize = 1024;
+    int32 OutputSize = TextureSize * TextureSize / 2;
+    FTexture2DRHIRef RenderTargetRHI = OutputRenderTarget->GameThread_GetRenderTargetResource()->GetRenderTargetTexture();
+    ENQUEUE_RENDER_COMMAND(CaptureCommand)
+        (
+            [ShaderPackedDatas, ShaderControlDatas, OutputSize, TextureSize, DataRadPooledBuffers, RenderTargetRHI](FRHICommandListImmediate& RHICmdList) {
+                RDGComputeWil21Buffer(RHICmdList, ShaderPackedDatas, ShaderControlDatas,
+                    OutputSize, TextureSize, DataRadPooledBuffers, RenderTargetRHI);
+            });
+}
+
 
 TArray<DoublePacked> ADataProcessor::ConvertDoublesToUint32s(const TArray<double>& doubleArray) {  
     TArray<DoublePacked> uintArray;  
@@ -382,6 +421,27 @@ TArray<DoublePacked> ADataProcessor::ConvertDoublesToUint32s(const TArray<double
 
     return uintArray;  
 }
+
+void ADataProcessor::InitializePersistentBuffer(TArray<uint32>& DataRad)  
+{
+    FRenderCommandFence Fence;
+    ENQUEUE_RENDER_COMMAND(InitializeBufferCommand)(  
+        [this, DataRad = MoveTemp(DataRad)](FRHICommandListImmediate&RHICmdList)  
+        {  
+            FRHIResourceCreateInfo CreateInfo(TEXT("Wil21ComputeShaderDataRad"));  
+            DataRadBuffer = RHICmdList.CreateVertexBuffer(DataRad.Num() * sizeof(uint32), BUF_Static | BUF_ShaderResource, CreateInfo);  
+            
+            void* BufferData = RHICmdList.LockBuffer(DataRadBuffer, 0, DataRad.Num() * sizeof(uint32), RLM_WriteOnly);  
+            FMemory::Memcpy(BufferData, DataRad.GetData(), DataRad.Num() * sizeof(uint32));  
+            RHICmdList.UnlockBuffer(DataRadBuffer);
+            FRDGBufferDesc BufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), ShaderPackedData.DataRad.Num());  
+            FRDGPooledBuffer* PooledBuffer = new FRDGPooledBuffer(DataRadBuffer, BufferDesc, ShaderPackedData.DataRad.Num(), TEXT("DataRadPoolBuffer"));  
+            DataRadPooledBuffer = TRefCountPtr<FRDGPooledBuffer>(PooledBuffer);  
+            
+        }  
+    );
+    
+}  
 
 
 void ADataProcessor::SetVariable(float SolarElevation,float SolarAzimuth, float Albedo, float Visibility)
@@ -423,11 +483,14 @@ double ADataProcessor::DoubleFromHalf(uint16 Half)
 void ADataProcessor::OnVariableChanged()
 {
     if (!OutputRenderTarget)  
-    {  
-        UE_LOG(LogTemp, Warning, TEXT("OutputRenderTarget is not initialized"));  
-        return;  
-    }  
-    UWil21RenderingBlueprintLibrary::UseRDGComputeWil21(GetWorld(), ShaderPackedData, ShaderControlData, OutputRenderTarget);
+    {
+        OutputRenderTarget = NewObject<UTextureRenderTarget2D>();
+        OutputRenderTarget->InitCustomFormat(1024, 512, PF_FloatRGBA, false);
+        OutputRenderTarget->UpdateResourceImmediate();
+        // UE_LOG(LogTemp, Warning, TEXT("OutputRenderTarget is not initialized"));  
+        // return;  
+    }
+    UseRDGComputeWil21(GetWorld(), ShaderPackedData, ShaderControlData);
 }
 #if WITH_EDITOR  
 void ADataProcessor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)  
@@ -442,16 +505,26 @@ void ADataProcessor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChang
         PropertyName == GET_MEMBER_NAME_CHECKED(FShaderControlData, Albedo) ||  
         PropertyName == GET_MEMBER_NAME_CHECKED(FShaderControlData, Visibility))  
     {
-        if (!bIsSliderChanging)  
+        if (!GetWorld()->GetTimerManager().IsTimerActive(SliderUpdateTimerHandle))  
         {  
-            bIsSliderChanging = true;  
-            GetWorld()->GetTimerManager().SetTimer(SliderFinishTimerHandle, this, &ADataProcessor::OnSliderChangeFinished, 0.2f, false);  
+            GetWorld()->GetTimerManager().SetTimer(SliderUpdateTimerHandle, this, &ADataProcessor::OnSliderChangeFinished, 0.01f, false);  
         }  
         else  
         {  
-            GetWorld()->GetTimerManager().ClearTimer(SliderFinishTimerHandle);  
-            GetWorld()->GetTimerManager().SetTimer(SliderFinishTimerHandle, this, &ADataProcessor::OnSliderChangeFinished, 0.2f, false);  
-        }  
+            // 如果计时器已经在运行，重置它  
+            // GetWorld()->GetTimerManager().ClearTimer(SliderUpdateTimerHandle);  
+            // GetWorld()->GetTimerManager().SetTimer(SliderUpdateTimerHandle, this, &ADataProcessor::OnSliderChangeFinished, 0.1f, false);  
+        } 
+        // if (!bIsSliderChanging)  
+        // {  
+        //     bIsSliderChanging = true;  
+        //     GetWorld()->GetTimerManager().SetTimer(SliderFinishTimerHandle, this, &ADataProcessor::OnSliderChangeFinished, 0.05f, false);  
+        // }  
+        // else  
+        // {  
+        //     GetWorld()->GetTimerManager().ClearTimer(SliderFinishTimerHandle);  
+        //     GetWorld()->GetTimerManager().SetTimer(SliderFinishTimerHandle, this, &ADataProcessor::OnSliderChangeFinished, 0.05f, false);  
+        // }  
 
 
         // UE_LOG(LogTemp, Warning, TEXT("Re-ComputeWil21"));

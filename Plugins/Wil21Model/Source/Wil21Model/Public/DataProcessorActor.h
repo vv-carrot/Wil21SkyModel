@@ -1,7 +1,6 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Engine/TextureRenderTarget2D.h"  
 #include "DatProcessor.h"
 #include "Wil21Rendering.h"
 
@@ -27,12 +26,18 @@ private:
 	
 	void OnSliderChangeFinished();
 	void OnSliderUpdate();
+	void InitializePersistentBuffer(TArray<uint32>& DataRad);
 	// Data processing functions
 	double DoubleFromHalf(uint16 Half);
 	TArray<DoublePacked> ConvertDoublesToUint32s(const TArray<double>& doubleArray);
+	void UseRDGComputeWil21(const UObject* WorldContextObject, const FShaderPackedData& ShaderPackedData, const FShaderControlData& ShaderControlData);
+	void PostInitProperties() override;
 	// For computing parameters 
 	FShaderPackedData ShaderPackedData;
 	FSkyModelData SkyModelData;
+	FBufferRHIRef DataRadBuffer = nullptr;	
+	FShaderResourceViewRHIRef DataRadSRV = nullptr;
+	TRefCountPtr<FRDGPooledBuffer> DataRadPooledBuffer;  
 
 	// For updating slider values
 	FTimerHandle SliderUpdateTimerHandle;  
@@ -44,6 +49,7 @@ public:
 	FShaderControlData ShaderControlData;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShaderControl")  
 	UTextureRenderTarget2D* OutputRenderTarget;
+	
 protected:  
 #if WITH_EDITOR  
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;  

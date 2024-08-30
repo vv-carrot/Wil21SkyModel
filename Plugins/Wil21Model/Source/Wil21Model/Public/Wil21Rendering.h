@@ -1,14 +1,14 @@
 #pragma once
 
 #include "RenderGraph.h"
-
+#include "RHI.h"
 #include "CoreMinimal.h"
 #include "DataDrivenShaderPlatformInfo.h"
 #include "UObject/ObjectMacros.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "RHIStaticStates.h"
-
-// #include "Engine/TextureRenderTarget2D.h"
+#include "RenderResource.h"
+#include "Engine/TextureRenderTarget2D.h"
 //
 // #include "PipelineStateCache.h"
 //
@@ -132,7 +132,7 @@ public:
 
 
 
-void RDGComputeWil21Buffer(FRHICommandListImmediate& RHIImmCmdList, const FShaderPackedData& ShaderPackedData, const FShaderControlData& ShaderControlData, int32 OutputSize, int32 TextureSize, FTexture2DRHIRef RenderTargetRHI);
+void RDGComputeWil21Buffer(FRHICommandListImmediate& RHIImmCmdList, const FShaderPackedData& ShaderPackedData, const FShaderControlData& ShaderControlData, int32 OutputSize, int32 TextureSize, TRefCountPtr<FRDGPooledBuffer> DataRadPooledBuffer, FTexture2DRHIRef RenderTargetRHI);
 ////////////////////// Util functions //////////////////////
 TArray<float> ConvertToFloat(const TArray<double>& DoubleArray);
 FRDGBufferRef CreateRawBuffer(FRDGBuilder& GraphBuilder, const TCHAR* Name, const TArray<float>& Data);

@@ -1,13 +1,12 @@
 #include "Wil21Rendering.h"
 
 #include "FemeerSurfelCacheDefinitions.h"
+#include "HairStrandsInterface.h"
 #include "Engine/TextureRenderTarget2D.h"
 
 #include "PixelShaderUtils.h"
 
 IMPLEMENT_GLOBAL_SHADER(FWil21RDGComputeShader, "/Wil21ModelShaders/Private/Wil21.usf", "Wil21CS1", SF_Compute);
-IMPLEMENT_GLOBAL_SHADER(FSpectrumToColorRDGCS, "/Wil21ModelShaders/Private/SpectrumToColor.usf", "Wil21CS2", SF_Compute);
-
 void UWil21RenderingBlueprintLibrary::UseRDGComputeWil21(const UObject* WorldContextObject, const FShaderPackedData& ShaderPackedData, const FShaderControlData& ShaderControlData, UTextureRenderTarget2D* OutputRenderTarget)
 {
 
@@ -16,12 +15,15 @@ void UWil21RenderingBlueprintLibrary::UseRDGComputeWil21(const UObject* WorldCon
 	int32 TextureSize = 1024;
 	int32 OutputSize = TextureSize * TextureSize / 2;
 	FTexture2DRHIRef RenderTargetRHI = OutputRenderTarget->GameThread_GetRenderTargetResource()->GetRenderTargetTexture();
-	ENQUEUE_RENDER_COMMAND(CaptureCommand)
-		(
-			[ShaderPackedData, ShaderControlData, OutputSize, TextureSize, RenderTargetRHI](FRHICommandListImmediate& RHICmdList) {
-				RDGComputeWil21Buffer(RHICmdList, ShaderPackedData, ShaderControlData, OutputSize, TextureSize, RenderTargetRHI);
-			});
+	// ENQUEUE_RENDER_COMMAND(CaptureCommand)
+	// 	(
+	// 		[ShaderPackedData, ShaderControlData, OutputSize, TextureSize, DataRadBuffer, RenderTargetRHI](FRHICommandListImmediate& RHICmdList) {
+	// 			RDGComputeWil21Buffer(RHICmdList, ShaderPackedData, ShaderControlData,
+	// 				OutputSize, TextureSize, DataRadBuffer, RenderTargetRHI);
+	// 		});
 }
+
+
 TArray<float> ConvertToFloat(const TArray<double>& DoubleArray)  
 {  
 	TArray<float> FloatArray;  
@@ -42,7 +44,9 @@ FRDGBufferRef CreateRawBuffer(FRDGBuilder& GraphBuilder, const TCHAR* Name, cons
 
 	return Buffer;  
 }
-void RDGComputeWil21Buffer(FRHICommandListImmediate& RHIImmCmdList, const FShaderPackedData& ShaderPackedData, const FShaderControlData& ShaderControlData, int32 OutputSize, int32 TextureSize, FTexture2DRHIRef RenderTargetRHI)
+
+
+void RDGComputeWil21Buffer(FRHICommandListImmediate& RHIImmCmdList, const FShaderPackedData& ShaderPackedData, const FShaderControlData& ShaderControlData, int32 OutputSize, int32 TextureSize, TRefCountPtr<FRDGPooledBuffer> DataRadPooledBuffer, FTexture2DRHIRef RenderTargetRHI)
 {
 	check(IsInRenderingThread());
 	// RDG Begin  
@@ -50,11 +54,13 @@ void RDGComputeWil21Buffer(FRHICommandListImmediate& RHIImmCmdList, const FShade
 
 	TArray<FSpectrum> SpectrumData;
 	SpectrumData.SetNum(OutputSize);
-	for (int32 i = 0; i < OutputSize; i++)
-	{
-		for (int32 c = 0; c < 11; c++)
-			SpectrumData[i].Values[c] = 0.5f;
-	}
+	for (FSpectrum& Spectrum : SpectrumData)  
+	{  
+		for (double& Value : Spectrum.Values)  
+		{  
+			Value = 0.0f;  
+		}  
+	} 
 	
 	FRDGBufferRef SpectrumBuffer = CreateStructuredBuffer(
 		GraphBuilder,
@@ -156,8 +162,8 @@ void RDGComputeWil21Buffer(FRHICommandListImmediate& RHIImmCmdList, const FShade
 			ShaderPackedData.ElevationsRad.GetData(),  
 			sizeof(FShaderPackedData) * ShaderPackedData.ElevationsRad.Num()
 		);
-
-		FRDGBufferRef DataRadBuffer = CreateRawBuffer(GraphBuilder, TEXT("DataRad"), ShaderPackedData.DataRad);  
+		
+		// FRDGBufferRef DataRadBuffer = CreateRawBuffer(GraphBuilder, TEXT("DataRad"), ShaderPackedData.DataRad);  
 
 		// Set parameters  
 		Parameters->SunBreaks = GraphBuilder.CreateSRV(SunBreaksBuffer, PF_Unknown);  
@@ -168,8 +174,12 @@ void RDGComputeWil21Buffer(FRHICommandListImmediate& RHIImmCmdList, const FShade
 		Parameters->AltitudesRad = GraphBuilder.CreateSRV(AltitudesRadBuffer, PF_Unknown);  
 		Parameters->ElevationsRad = GraphBuilder.CreateSRV(ElevationsRadBuffer, PF_Unknown);
 		
-		Parameters->DataRad = GraphBuilder.CreateSRV(DataRadBuffer, PF_R32_UINT);
+		// Parameters->DataRad = GraphBuilder.CreateSRV(DataRadBuffer, PF_R32_UINT);
+		//ExternalDataRadBuffer.Buffer = PersistentDataRadBuffer;  
+		// ExternalDataRadBuffer.SRV = DataRadSRV;
 
+		FRDGBufferRef DataRadRDGBuffer = GraphBuilder.RegisterExternalBuffer(DataRadPooledBuffer, TEXT("DataRadBuffer"), ERDGBufferFlags::MultiFrame);
+		Parameters->DataRad = GraphBuilder.CreateSRV(DataRadRDGBuffer, PF_R32_UINT);
 		
 		// FRDGBufferRef SpectralResponseData = CreateRawBuffer(GraphBuilder, TEXT("SpectralResponse"), ShaderPackedData.SpectralResponse); 
 		// Parameters->SpectralResponse = GraphBuilder.CreateSRV(SpectralResponseData, PF_R32_UINT);
